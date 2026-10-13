@@ -23,9 +23,37 @@ input{font:inherit;font-size:18px;text-align:center;padding:8px;border-radius:8p
 </style></head><body>
 <div id="hud"><span id="lv"></span><span id="lives"></span><span id="score"></span><span id="key"></span><span id="pw"></span><span id="time"></span></div>
 <div id="fx"></div><div id="hint">Click the game to look with the mouse (or hold the button and drag)</div><canvas id="mm" width="300" height="220"></canvas><div id="mpbar"></div><div id="toast"></div><div id="ov"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
+window.__gameLoadFailure = function (msg) {
+  document.body.innerHTML = '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#05060f;color:#dff;font-family:Trebuchet MS,Segoe UI,sans-serif;text-align:center;padding:24px;box-sizing:border-box"><div><h1 style="font-size:clamp(28px,5vw,56px);margin:0 0 12px;color:#19e6ff;letter-spacing:.08em">LASER MAZE</h1><p style="margin:0;line-height:1.6;color:#dff;max-width:640px">The game could not load its libraries. Please refresh or try a different browser.\n\n' + msg + '</p></div></div>';
+  console.error(msg);
+};
+function loadScript(src, fallback, onLoad, onError) {
+  var s = document.createElement('script');
+  s.src = src;
+  s.async = false;
+  s.onload = onLoad;
+  s.onerror = function () {
+    if (fallback) {
+      var t = document.createElement('script');
+      t.src = fallback;
+      t.async = false;
+      t.onload = onLoad;
+      t.onerror = function () {
+        if (onError) onError();
+        else window.__gameLoadFailure('Failed to load required game scripts.');
+      };
+      document.head.appendChild(t);
+    } else {
+      if (onError) onError();
+      else window.__gameLoadFailure('Failed to load required game scripts.');
+    }
+  };
+  document.head.appendChild(s);
+}
+function startGame(){
+// ---------- LEVEL DATA ----------  # wall, P start, K key, E exit, C coin, L static laser, T timed laser,
+// M moving laser, D drone, S shield, F speed boost, I time boost
 const LV=[
 {n:"Training Facility",t:60,m:[
 "###############","#P..#.....#..K#","#.#.#.###.#.#.#","#.#...#C#...#.#","#.#####.#####.#",
@@ -42,6 +70,8 @@ const LV=[
 {n:"Core Facility",t:40,m:[
 "###############","#P..#.....#.DK#","#.#.#.#.#.#.#.#","#.#...#C#..C#.#","#.#.###.###.#.#",
 "#C..M.TC.TM...#","#.#.###.###.#.#","#.#C..#S#C..#.#","#.#.#.#.#.#.#.#","#C..C..D..#.DE#","###############"]}];
+
+// ---------- HARD MODE TWEAKS ----------
 LV.forEach((l,i)=>l.t=[48,45,40,36,30][i]);
 LV[0].m[5]="#C..L...T.C...#";
 LV[1].m[8]="#.#.###D#.#.#.#";
@@ -50,10 +80,13 @@ LV[3].m[5]="#C..M.TC.TM...#";
 LV[3].m[3]="#.#...#C#.D.#C#";
 LV[4].m[5]="#C..M.TCMTM...#";
 LV[4].m[7]="#.#C..#S#D..#.#";
+// ---------- AUDIO (generated, no files needed) ----------
 let AC=null,musicOn=true;
 function snd(f,d=.12,type="square",v=.05,f2){try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();const o=AC.createOscillator(),g=AC.createGain(),n=AC.currentTime;o.type=type;o.frequency.setValueAtTime(f,n);if(f2)o.frequency.exponentialRampToValueAtTime(f2,n+d);g.gain.setValueAtTime(v,n);g.gain.exponentialRampToValueAtTime(.0001,n+d);o.connect(g);g.connect(AC.destination);o.start();o.stop(n+d)}catch(e){}}
 const SFX={click:()=>snd(500,.08),coin:()=>{snd(880,.07);setTimeout(()=>snd(1320,.1),60)},key:()=>{snd(500,.4,"triangle",.08,1500)},hit:()=>snd(300,.4,"sawtooth",.09,60),power:()=>snd(400,.35,"sine",.09,1200),laser:()=>snd(1800,.07,"sawtooth",.02),win:()=>[523,659,784,1047].forEach((f,i)=>setTimeout(()=>snd(f,.2,"triangle",.08),i*110)),over:()=>snd(400,.9,"sawtooth",.08,50),deny:()=>snd(150,.25,"square",.07)};
 const NOTES=[110,110,165,131,110,110,196,165];let nb=0;setInterval(()=>{if(musicOn&&state==="play")snd(NOTES[nb++%8],.2,"triangle",.025)},230);
+
+// ---------- THREE.JS SETUP ----------
 const scene=new THREE.Scene();scene.background=new THREE.Color(0x05060f);scene.fog=new THREE.Fog(0x05060f,6,24);
 const cam=new THREE.PerspectiveCamera(72,1,.1,100);
 const ren=new THREE.WebGLRenderer({antialias:true});ren.setPixelRatio(Math.min(devicePixelRatio,2));document.body.prepend(ren.domElement);
@@ -65,32 +98,270 @@ let W=new THREE.Group();scene.add(W);
 const gWall=new THREE.BoxGeometry(2,2.2,2),eWall=new THREE.EdgesGeometry(gWall);
 const mWall=new THREE.MeshStandardMaterial({color:0x1a2350,emissive:0x0a1440,metalness:.6,roughness:.4}),lWall=new THREE.LineBasicMaterial({color:0x19e6ff});
 const std=(c,e=.5)=>new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:e});
-let state="menu",lvl=0,score=0,lives=3,time=0,hasKey=false,shield=false,boost=0,hi=0,T=0,LT=0,grace=0,invuln=0,denyCd=0,startScore=0,levelsDone=0;try{hi=+localStorage.getItem("lm_hi")||0}catch(e){}
-let NET={on:false},fpMode=true,yaw=0,ceil,G=[],P={x:0,z:0},start={x:0,z:0},items=[],lasers=[],drones=[],exitObj=null,player,shieldFx;const keys={};
-addEventListener("keydown",e=>{if(e.target.tagName==="INPUT")return;keys[e.code]=true;if(e.code.startsWith("Arrow")||e.code==="Space")e.preventDefault();if(e.code==="Escape"||e.code==="KeyP")togglePause();if(e.code==="KeyR"&&(state==="play"||state==="pause"))restartLevel();if(e.code==="KeyM")musicOn=!musicOn});
-addEventListener("keyup",e=>keys[e.code]=false);const cv=ren.domElement;cv.addEventListener("click",()=>{if(fpMode&&state==="play"&&!document.pointerLockElement){try{cv.requestPointerLock()}catch(e){}}});
+
+// ---------- GAME STATE ----------
+let state="menu",lvl=0,score=0,lives=3,time=0,hasKey=false,shield=false,boost=0,hi=0,T=0,LT=0,grace=0,invuln=0,denyCd=0,startScore=0,levelsDone=0;
+try{hi=+localStorage.getItem("lm_hi")||0}catch(e){}
+let NET={on:false},fpMode=true,yaw=0,ceil,G=[],P={x:0,z:0},start={x:0,z:0},items=[],lasers=[],drones=[],exitObj=null,player,shieldFx;
+const keys={};
+addEventListener("keydown",e=>{if(e.target.tagName==="INPUT")return;keys[e.code]=true;if(e.code.startsWith("Arrow")||e.code==="Space")e.preventDefault();
+if(e.code==="Escape"||e.code==="KeyP")togglePause();if(e.code==="KeyR"&&(state==="play"||state==="pause"))restartLevel();if(e.code==="KeyM")musicOn=!musicOn});
+addEventListener("keyup",e=>keys[e.code]=false);
+const cv=ren.domElement;
+cv.addEventListener("click",()=>{if(fpMode&&state==="play"&&!document.pointerLockElement){try{cv.requestPointerLock()}catch(e){}}});
 addEventListener("mousemove",e=>{if(!fpMode||state!=="play")return;if(document.pointerLockElement===cv||e.buttons===1)yaw-=e.movementX*.0025});
 document.addEventListener("pointerlockchange",()=>{if(!document.pointerLockElement&&state==="play"&&fpMode)togglePause()});
-const $=id=>document.getElementById(id);function ov(h){if(h&&document.exitPointerLock)document.exitPointerLock();const o=$("ov");o.innerHTML=h;o.style.display=h?"flex":"none"}
+const $=id=>document.getElementById(id);
+function ov(h){if(h&&document.exitPointerLock)document.exitPointerLock();const o=$("ov");o.innerHTML=h;o.style.display=h?"flex":"none"}
 let tt=0;function toast(t,c="#19e6ff",ms=1600){const e=$("toast");e.textContent=t;e.style.color=c;clearTimeout(tt);tt=setTimeout(()=>e.textContent="",ms)}
 function wallAt(c,r){return !G[r]||G[r][c]===undefined||G[r][c]==="#"}
 function free(x,z,r=.55){return ![[-r,-r],[r,-r],[-r,r],[r,r]].some(([a,b])=>wallAt(Math.floor((x+a)/2+.5),Math.floor((z+b)/2+.5)))}
-function mkRobot(){const g=new THREE.Group();const b=new THREE.Mesh(new THREE.BoxGeometry(.9,.8,.9),std(0x19e6ff,.35));b.position.y=.6;g.add(b);const h=new THREE.Mesh(new THREE.SphereGeometry(.38,16,12),new THREE.MeshStandardMaterial({color:0xeaffff}));h.position.y=1.25;g.add(h);const e=new THREE.Mesh(new THREE.BoxGeometry(.5,.12,.1),std(0x001a33,0));e.position.set(0,1.3,.34);g.add(e);return g}
-function mkDrone(){const g=new THREE.Group();g.add(new THREE.Mesh(new THREE.SphereGeometry(.5,16,12),std(0x8a4dff,.5)));const r=new THREE.Mesh(new THREE.TorusGeometry(.7,.06,8,24),std(0xff4de0,.8));r.rotation.x=Math.PI/2;g.add(r);const e=new THREE.Mesh(new THREE.SphereGeometry(.14,8,8),std(0xff3b5c,1));e.position.z=.46;g.add(e);return g}
-function mkItem(ch){let m;if(ch==="C"){m=new THREE.Mesh(new THREE.CylinderGeometry(.35,.35,.1,20),std(0xffd23f,.7));m.rotation.x=Math.PI/2;const g=new THREE.Group();g.add(m);return g}const g=new THREE.Group();if(ch==="K"){const t=new THREE.Mesh(new THREE.TorusGeometry(.3,.1,8,16),std(0xffd23f,.9));t.position.y=.35;const s=new THREE.Mesh(new THREE.BoxGeometry(.12,.7,.12),std(0xffd23f,.9));s.position.y=-.2;g.add(t,s)}if(ch==="S")g.add(new THREE.Mesh(new THREE.IcosahedronGeometry(.45,0),std(0x3d7bff,.9)));if(ch==="F")g.add(new THREE.Mesh(new THREE.ConeGeometry(.4,.8,4),std(0x39ff7a,.9)));if(ch==="I")g.add(new THREE.Mesh(new THREE.TorusGeometry(.38,.14,8,16),std(0xb04dff,.9)));return g}
-function loadLevel(i){scene.remove(W);W=new THREE.Group();scene.add(W);G=LV[i].m;items=[];lasers=[];drones=[];hasKey=false;shield=false;boost=0;time=LV[i].t*(fpMode?1:1.25);LT=0;grace=1.5;invuln=0;const fl=new THREE.Mesh(new THREE.PlaneGeometry(30,22),new THREE.MeshStandardMaterial({color:0x0a0f24,metalness:.5,roughness:.6}));fl.rotation.x=-Math.PI/2;fl.position.set(14,0,10);W.add(fl);ceil=new THREE.Mesh(new THREE.PlaneGeometry(30,22),new THREE.MeshStandardMaterial({color:0x070a18}));ceil.rotation.x=Math.PI/2;ceil.position.set(14,2.2,10);W.add(ceil);const pts=[];for(let a=0;a<=15;a++)pts.push(-1+a*2,.02,-1,-1+a*2,.02,21);for(let a=0;a<=11;a++)pts.push(-1,.02,-1+a*2,29,.02,-1+a*2);const gg=new THREE.BufferGeometry();gg.setAttribute("position",new THREE.BufferAttribute(new Float32Array(pts),3));W.add(new THREE.LineSegments(gg,new THREE.LineBasicMaterial({color:0x123a66})));let li=0;G.forEach((row,r)=>[...row].forEach((ch,c)=>{const x=c*2,z=r*2;if(ch==="#"){const w=new THREE.Mesh(gWall,mWall);w.position.set(x,1.1,z);w.add(new THREE.LineSegments(eWall,lWall));W.add(w)}else if(ch==="P"){start={x,z}}else if("CKSFI".includes(ch)){const m=mkItem(ch);m.position.set(x,.9,z);W.add(m);items.push({t:ch,m,x,z})}else if(ch==="E"){const m=new THREE.Mesh(new THREE.TorusGeometry(.8,.12,10,24),std(0xff3b5c,.9));m.rotation.x=Math.PI/2;m.position.set(x,.15,z);W.add(m);const col=new THREE.Mesh(new THREE.CylinderGeometry(.7,.7,3,16,1,true),new THREE.MeshBasicMaterial({color:0xff3b5c,transparent:true,opacity:.18,side:THREE.DoubleSide}));col.position.set(x,1.5,z);W.add(col);exitObj={x,z,ring:m,col}}else if("LTM".includes(ch)){const mat=new THREE.MeshBasicMaterial({color:0xff2040,transparent:true});const b=new THREE.Mesh(new THREE.BoxGeometry(.22,.3,2),mat);b.position.set(x,.8,z);W.add(b);lasers.push({t:ch,m:b,mat,bx:x,x,z,on:ch!=="T",off:li++*1.1})}else if(ch==="D"){const m=mkDrone();W.add(m);drones.push({m,x,z,sx:x,sz:z})}}));player=mkRobot();W.add(player);shieldFx=new THREE.Mesh(new THREE.SphereGeometry(1.1,16,12),new THREE.MeshBasicMaterial({color:0x3d7bff,transparent:true,opacity:.3}));shieldFx.visible=false;player.add(shieldFx);shieldFx.position.y=.8;P={x:start.x,z:start.z};yaw=-Math.PI/2;state="play";ov("");toast("LEVEL "+(i+1)+": "+LV[i].n.toUpperCase());cam.position.set(P.x,17,P.z+10)}
+
+// ---------- BUILD LEVEL ----------
+function mkRobot(){const g=new THREE.Group();
+const b=new THREE.Mesh(new THREE.BoxGeometry(.9,.8,.9),std(0x19e6ff,.35));b.position.y=.6;g.add(b);
+const h=new THREE.Mesh(new THREE.SphereGeometry(.38,16,12),new THREE.MeshStandardMaterial({color:0xeaffff}));h.position.y=1.25;g.add(h);
+const e=new THREE.Mesh(new THREE.BoxGeometry(.5,.12,.1),std(0x001a33,0));e.position.set(0,1.3,.34);g.add(e);return g}
+function mkDrone(){const g=new THREE.Group();
+g.add(new THREE.Mesh(new THREE.SphereGeometry(.5,16,12),std(0x8a4dff,.5)));
+const r=new THREE.Mesh(new THREE.TorusGeometry(.7,.06,8,24),std(0xff4de0,.8));r.rotation.x=Math.PI/2;g.add(r);
+const e=new THREE.Mesh(new THREE.SphereGeometry(.14,8,8),std(0xff3b5c,1));e.position.z=.46;g.add(e);return g}
+function mkItem(ch){let m;
+if(ch==="C"){m=new THREE.Mesh(new THREE.CylinderGeometry(.35,.35,.1,20),std(0xffd23f,.7));m.rotation.x=Math.PI/2;const g=new THREE.Group();g.add(m);return g}
+const g=new THREE.Group();
+if(ch==="K"){const t=new THREE.Mesh(new THREE.TorusGeometry(.3,.1,8,16),std(0xffd23f,.9));t.position.y=.35;const s=new THREE.Mesh(new THREE.BoxGeometry(.12,.7,.12),std(0xffd23f,.9));s.position.y=-.2;g.add(t,s)}
+if(ch==="S")g.add(new THREE.Mesh(new THREE.IcosahedronGeometry(.45,0),std(0x3d7bff,.9)));
+if(ch==="F")g.add(new THREE.Mesh(new THREE.ConeGeometry(.4,.8,4),std(0x39ff7a,.9)));
+if(ch==="I")g.add(new THREE.Mesh(new THREE.TorusGeometry(.38,.14,8,16),std(0xb04dff,.9)));
+return g}
+
+function loadLevel(i){
+scene.remove(W);W=new THREE.Group();scene.add(W);
+G=LV[i].m;items=[];lasers=[];drones=[];hasKey=false;shield=false;boost=0;time=LV[i].t*(fpMode?1:1.25);LT=0;grace=1.5;invuln=0;
+const fl=new THREE.Mesh(new THREE.PlaneGeometry(30,22),new THREE.MeshStandardMaterial({color:0x0a0f24,metalness:.5,roughness:.6}));
+fl.rotation.x=-Math.PI/2;fl.position.set(14,0,10);W.add(fl);
+ceil=new THREE.Mesh(new THREE.PlaneGeometry(30,22),new THREE.MeshStandardMaterial({color:0x070a18}));ceil.rotation.x=Math.PI/2;ceil.position.set(14,2.2,10);W.add(ceil);
+const pts=[];for(let a=0;a<=15;a++)pts.push(-1+a*2,.02,-1,-1+a*2,.02,21);for(let a=0;a<=11;a++)pts.push(-1,.02,-1+a*2,29,.02,-1+a*2);
+const gg=new THREE.BufferGeometry();gg.setAttribute("position",new THREE.BufferAttribute(new Float32Array(pts),3));
+W.add(new THREE.LineSegments(gg,new THREE.LineBasicMaterial({color:0x123a66})));
+let li=0;
+G.forEach((row,r)=>[...row].forEach((ch,c)=>{const x=c*2,z=r*2;
+if(ch==="#"){const w=new THREE.Mesh(gWall,mWall);w.position.set(x,1.1,z);w.add(new THREE.LineSegments(eWall,lWall));W.add(w)}
+else if(ch==="P"){start={x,z}}
+else if("CKSFI".includes(ch)){const m=mkItem(ch);m.position.set(x,.9,z);W.add(m);items.push({t:ch,m,x,z})}
+else if(ch==="E"){const m=new THREE.Mesh(new THREE.TorusGeometry(.8,.12,10,24),std(0xff3b5c,.9));m.rotation.x=Math.PI/2;m.position.set(x,.15,z);W.add(m);
+const col=new THREE.Mesh(new THREE.CylinderGeometry(.7,.7,3,16,1,true),new THREE.MeshBasicMaterial({color:0xff3b5c,transparent:true,opacity:.18,side:THREE.DoubleSide}));col.position.set(x,1.5,z);W.add(col);
+exitObj={x,z,ring:m,col}}
+else if("LTM".includes(ch)){const mat=new THREE.MeshBasicMaterial({color:0xff2040,transparent:true});
+const b=new THREE.Mesh(new THREE.BoxGeometry(.22,.3,2),mat);b.position.set(x,.8,z);W.add(b);
+lasers.push({t:ch,m:b,mat,bx:x,x,z,on:ch!=="T",off:li++*1.1})}
+else if(ch==="D"){const m=mkDrone();W.add(m);drones.push({m,x,z,sx:x,sz:z})}}));
+player=mkRobot();W.add(player);shieldFx=new THREE.Mesh(new THREE.SphereGeometry(1.1,16,12),new THREE.MeshBasicMaterial({color:0x3d7bff,transparent:true,opacity:.3}));shieldFx.visible=false;player.add(shieldFx);shieldFx.position.y=.8;
+P={x:start.x,z:start.z};yaw=-Math.PI/2;state="play";ov("");toast("LEVEL "+(i+1)+": "+LV[i].n.toUpperCase());
+cam.position.set(P.x,17,P.z+10)}
+
+// ---------- GAME LOGIC ----------
 function newGame(){SFX.click();score=0;lives=3;lvl=0;levelsDone=0;startScore=0;loadLevel(0)}
 function restartLevel(){if(NET.on)return;score=startScore;lives=3;loadLevel(lvl);ov("")}
-function togglePause(){if(NET.on)return;if(state==="play"){state="pause";ov(`<div><h1>GAME PAUSED</h1><br><button onclick="resume()">RESUME</button><button onclick="restartLevel()">RESTART LEVEL</button><button onclick="menu()">MAIN MENU</button></div>`)}else if(state==="pause")resume()}
+function togglePause(){if(NET.on)return; /* no pausing in multiplayer */ if(state==="play"){state="pause";ov(`<div><h1>GAME PAUSED</h1><br><button onclick="resume()">RESUME</button><button onclick="restartLevel()">RESTART LEVEL</button><button onclick="menu()">MAIN MENU</button></div>`)}else if(state==="pause")resume()}
 function resume(){SFX.click();state="play";ov("")}
 function respawn(){P={x:start.x,z:start.z};yaw=-Math.PI/2;drones.forEach(d=>{d.x=d.sx;d.z=d.sz});grace=1.5;invuln=1.6}
-function hurt(){if(invuln>0||state!=="play")return;if(shield){shield=false;invuln=1;SFX.hit();toast("SHIELD USED","#3d7bff",900);return}lives--;score=Math.max(0,score-25);SFX.hit();toast("HIT!  -25","#ff3b5c",900);if(lives<=0)return NET.on?mpDie():endGame(false);respawn()}
-function endGame(win){state=win?"win":"over";const nh=score>hi;if(nh){hi=score;try{localStorage.setItem("lm_hi",hi)}catch(e){}}win?SFX.win():SFX.over();ov(`<div><h1>${win?"FACILITY ESCAPED!":"GAME OVER"}</h1><h2>${win?"MISSION COMPLETE":time<=0?"TIME EXPIRED":"SYSTEMS OFFLINE"}</h2><p>FINAL SCORE<br><b style="font-size:2em;color:#ffd23f">${score}</b></p><p>HIGH SCORE: ${hi}</p><p>LEVELS COMPLETED: ${levelsDone}/${LV.length}</p>${nh?'<p style="color:#39ff7a;font-weight:900">NEW HIGH SCORE!</p>':"}<button onclick="newGame()">PLAY AGAIN</button><button onclick="menu()">MAIN MENU</button></div>`)}
-function levelComplete(){if(NET.on)return mpFinish();state="between";const bonus=Math.floor(time)*2;score+=100+bonus;levelsDone++;SFX.win();toast("ESCAPE SUCCESSFUL!  +"+(100+bonus),"#39ff7a",2200);setTimeout(()=>{if(state!=="between")return;if(lvl+1>=LV.length)endGame(true);else{lvl++;startScore=score;loadLevel(lvl)}},2300)}
-function update(dt){LT+=dt;time-=dt;grace-=dt;invuln-=dt;denyCd-=dt;boost-=dt;if(time<=0){time=0;return NET.on?mpTimeUp():endGame(false)}let dx,dz;if(fpMode){yaw+=((keys.ArrowLeft||keys.KeyA?1:0)-(keys.ArrowRight||keys.KeyD?1:0))*2.4*dt;const fw=(keys.ArrowUp||keys.KeyW?1:0)-(keys.ArrowDown||keys.KeyS?1:0),sd=(keys.KeyE?1:0)-(keys.KeyQ?1:0),sp0=(boost>0?8:5)*dt;dx=(-Math.sin(yaw)*fw+Math.cos(yaw)*sd)*sp0;dz=(-Math.cos(yaw)*fw-Math.sin(yaw)*sd)*sp0}else{const ax=(keys.ArrowRight||keys.KeyD?1:0)-(keys.ArrowLeft||keys.KeyA?1:0),az=(keys.ArrowDown||keys.KeyS?1:0)-(keys.ArrowUp||keys.KeyW?1:0),l=Math.hypot(ax,az)||1,s2=(boost>0?9:6)*dt;dx=ax/l*s2;dz=az/l*s2;if(ax||az)player.rotation.y=Math.atan2(ax,az)}if(free(P.x+dx,P.z))P.x+=dx;if(free(P.x,P.z+dz))P.z+=dz;if(NET.on){NET.tick-=dt;if(NET.tick<=0){NET.tick=.07;emit({t:"pos",id:NET.me,x:P.x,z:P.z,yaw:fpMode?yaw:player.rotation.y-Math.PI,lives,score})}}for(const it of items){if(it.got||Math.hypot(P.x-it.x,P.z-it.z)>.9)continue;it.got=true;it.m.visible=false;if(it.t==="C"){score+=10;SFX.coin()}if(it.t==="K"){hasKey=true;score+=50;SFX.key();toast("ACCESS KEY ACQUIRED","#ffd23f")}if(it.t==="S"){shield=true;SFX.power();toast("SHIELD ONLINE","#3d7bff")}if(it.t==="F"){boost=5;SFX.power();toast("SPEED BOOST!","#39ff7a")}if(it.t==="I"){time+=10;SFX.power();toast("+10 SECONDS","#b04dff")}}if(Math.hypot(P.x-exitObj.x,P.z-exitObj.z)<1.1){if(hasKey)return levelComplete();if(denyCd<=0){denyCd=1.5;SFX.deny();toast("ACCESS DENIED","#ff3b5c")}}for(const L of lasers){if(L.t==="M"){L.x=L.bx+Math.sin(LT*2.2+L.off)*3;L.on=true}if(L.t==="T"){const ph=(LT+L.off)%3,on=ph>=1.6;if(on&&!L.on&&Math.hypot(P.x-L.x,P.z-L.z)<10)SFX.laser();L.on=on;L.warn=ph>1.2&&!on}L.m.position.x=L.x;if(L.on&&Math.abs(P.x-L.x)<.5&&Math.abs(P.z-L.z)<1.1)hurt()}if(grace<=0)for(const d of drones){const ex=P.x-d.x,ez=P.z-d.z,sp=(2.4+lvl*.4)*(fpMode?1:.8)*dt;const mv=[[Math.sign(ex)*sp,0],[0,Math.sign(ez)*sp]];if(Math.abs(ez)>Math.abs(ex))mv.reverse();for(const[a,b]of mv)if((a||b)&&free(d.x+a,d.z+b,.45)){d.x+=a;d.z+=b;break}if(Math.hypot(ex,ez)<1)hurt()}}
-function anim(){const view=state==="play"||state==="pause"||state==="between";items.forEach(it=>{it.m.rotation.y=T*2;it.m.position.y=.9+Math.sin(T*3+it.x)*.12});if(exitObj){const c=hasKey?0x39ff7a:0xff3b5c;exitObj.ring.material.color.setHex(c);exitObj.ring.material.emissive.setHex(c);exitObj.col.material.color.setHex(c);exitObj.ring.rotation.z=T}lasers.forEach(L=>{const on=L.on;L.mat.opacity=on?1:(L.warn&&Math.floor(T*14)%2?.5:.1);L.m.scale.x=on?1.6:.6;L.m.position.x=L.x});drones.forEach(d=>{d.m.position.set(d.x,1+Math.sin(T*3+d.sx)*.15,d.z);d.m.rotation.y=T});if(NET.on&&NET.players)for(const id in NET.players){const q=NET.players[id];if(id===NET.me||!q.mesh)continue;q.mesh.visible=q.alive!==false;if(q.x!==undefined){q.mesh.position.x+=(q.x-q.mesh.position.x)*.35;q.mesh.position.z+=(q.z-q.mesh.position.z)*.35;q.mesh.rotation.y=(q.yaw||0)+Math.PI}}if(player){player.position.set(P.x,0,P.z);player.visible=!(view&&fpMode);shieldFx.visible=shield&&!fpMode;plight.position.set(P.x,3,P.z)}const fv=fpMode?72:55;if(cam.fov!==fv){cam.fov=fv;cam.updateProjectionMatrix()}scene.fog.near=!view?40:fpMode?6:18;scene.fog.far=!view?90:fpMode?24:34;if(ceil)ceil.visible=view&&fpMode;if(!view){const a=T*.15;cam.position.set(14+Math.cos(a)*22,16,10+Math.sin(a)*14);cam.lookAt(14,0,10)}else if(fpMode){cam.position.set(P.x,1.3,P.z);cam.rotation.set(0,yaw,0)}else{cam.position.lerp(new THREE.Vector3(P.x,13,P.z+8),.1);cam.lookAt(cam.position.x,0,cam.position.z-8)}const inPlay=state==="play"||state==="pause"||state==="between";$("hud").style.visibility=inPlay?"visible":"hidden";$("mm").style.display=inPlay&&fpMode?"block":"none";if(inPlay&&fpMode)drawMap();$("hint").style.display=state==="play"&&fpMode&&!document.pointerLockElement?"block":"none";mpBar(inPlay);$("fx").style.boxShadow=shield?"inset 0 0 90px #3d7bffaa":invuln>0&&state==="play"?"inset 0 0 130px #ff3b5ccc":"none";$("lv").textContent="LEVEL "+(lvl+1)+(fpMode?" · FIRST PERSON":" · TOP-DOWN");$("lives").textContent="❤️".repeat(Math.max(lives,0))+"🖤".repeat(3-Math.max(lives,0));$("score").textContent="SCORE: "+score;$("key").textContent="KEY: "+(hasKey?"✓":"LOCKED");$("pw").textContent=shield?"🛡 SHIELD":boost>0?"⚡ "+boost.toFixed(1)+"s":"";$("pw").style.display=shield||boost>0?"":"none";$("time").textContent="TIME: "+Math.ceil(time);$("time").style.color=time<10?"#ff3b5c":"#ffd23f"}
+function hurt(){if(invuln>0||state!=="play")return;
+if(shield){shield=false;invuln=1;SFX.hit();toast("SHIELD USED","#3d7bff",900);return}
+lives--;score=Math.max(0,score-25);SFX.hit();toast("HIT!  -25","#ff3b5c",900);
+if(lives<=0)return NET.on?mpDie():endGame(false);respawn()}
+function endGame(win){
+state=win?"win":"over";const nh=score>hi;if(nh){hi=score;try{localStorage.setItem("lm_hi",hi)}catch(e){}}
+win?SFX.win():SFX.over();
+ov(`<div><h1>${win?"FACILITY ESCAPED!":"GAME OVER"}</h1><h2>${win?"MISSION COMPLETE":time<=0?"TIME EXPIRED":"SYSTEMS OFFLINE"}</h2>
+<p>FINAL SCORE<br><b style="font-size:2em;color:#ffd23f">${score}</b></p><p>HIGH SCORE: ${hi}</p><p>LEVELS COMPLETED: ${levelsDone}/${LV.length}</p>${nh?'<p style="color:#39ff7a;font-weight:900">NEW HIGH SCORE!</p>':"}
+<button onclick="newGame()">PLAY AGAIN</button><button onclick="menu()">MAIN MENU</button></div>`)}
+function levelComplete(){if(NET.on)return mpFinish();state="between";const bonus=Math.floor(time)*2;score+=100+bonus;levelsDone++;SFX.win();
+toast("ESCAPE SUCCESSFUL!  +"+(100+bonus),"#39ff7a",2200);
+setTimeout(()=>{if(state!=="between")return;if(lvl+1>=LV.length)endGame(true);else{lvl++;startScore=score;loadLevel(lvl)}},2300)}
+
+function update(dt){
+LT+=dt;time-=dt;grace-=dt;invuln-=dt;denyCd-=dt;boost-=dt;
+if(time<=0){time=0;return NET.on?mpTimeUp():endGame(false)}
+// movement
+let dx,dz;
+if(fpMode){ // first person: left/right turn, up/down walk, Q/E strafe
+yaw+=((keys.ArrowLeft||keys.KeyA?1:0)-(keys.ArrowRight||keys.KeyD?1:0))*2.4*dt;
+const fw=(keys.ArrowUp||keys.KeyW?1:0)-(keys.ArrowDown||keys.KeyS?1:0),sd=(keys.KeyE?1:0)-(keys.KeyQ?1:0),sp0=(boost>0?8:5)*dt;
+dx=(-Math.sin(yaw)*fw+Math.cos(yaw)*sd)*sp0;dz=(-Math.cos(yaw)*fw-Math.sin(yaw)*sd)*sp0}
+else{ // top-down: keys move in the direction pressed
+const ax=(keys.ArrowRight||keys.KeyD?1:0)-(keys.ArrowLeft||keys.KeyA?1:0),az=(keys.ArrowDown||keys.KeyS?1:0)-(keys.ArrowUp||keys.KeyW?1:0),l=Math.hypot(ax,az)||1,s2=(boost>0?9:6)*dt;
+dx=ax/l*s2;dz=az/l*s2;if(ax||az)player.rotation.y=Math.atan2(ax,az)}
+if(free(P.x+dx,P.z))P.x+=dx;if(free(P.x,P.z+dz))P.z+=dz;
+if(NET.on){NET.tick-=dt;if(NET.tick<=0){NET.tick=.07;emit({t:"pos",id:NET.me,x:P.x,z:P.z,yaw:fpMode?yaw:player.rotation.y-Math.PI,lives,score})}}
+// pickups
+for(const it of items){if(it.got||Math.hypot(P.x-it.x,P.z-it.z)>.9)continue;it.got=true;it.m.visible=false;
+if(it.t==="C"){score+=10;SFX.coin()}
+if(it.t==="K"){hasKey=true;score+=50;SFX.key();toast("ACCESS KEY ACQUIRED","#ffd23f")}
+if(it.t==="S"){shield=true;SFX.power();toast("SHIELD ONLINE","#3d7bff")}
+if(it.t==="F"){boost=5;SFX.power();toast("SPEED BOOST!","#39ff7a")}
+if(it.t==="I"){time+=10;SFX.power();toast("+10 SECONDS","#b04dff")}}
+// exit
+if(Math.hypot(P.x-exitObj.x,P.z-exitObj.z)<1.1){if(hasKey)return levelComplete();if(denyCd<=0){denyCd=1.5;SFX.deny();toast("ACCESS DENIED","#ff3b5c")}}
+// lasers
+for(const L of lasers){
+if(L.t==="M"){L.x=L.bx+Math.sin(LT*2.2+L.off)*3;L.on=true}
+if(L.t==="T"){const ph=(LT+L.off)%3,on=ph>=1.6;if(on&&!L.on&&Math.hypot(P.x-L.x,P.z-L.z)<10)SFX.laser();L.on=on;L.warn=ph>1.2&&!on}
+L.m.position.x=L.x;
+if(L.on&&Math.abs(P.x-L.x)<.5&&Math.abs(P.z-L.z)<1.1)hurt()}
+// drones: move along the axis with the larger gap, try the other axis if blocked
+if(grace<=0)for(const d of drones){const ex=P.x-d.x,ez=P.z-d.z,sp=(2.4+lvl*.4)*(fpMode?1:.8)*dt;
+const mv=[[Math.sign(ex)*sp,0],[0,Math.sign(ez)*sp]];if(Math.abs(ez)>Math.abs(ex))mv.reverse();
+for(const[a,b]of mv)if((a||b)&&free(d.x+a,d.z+b,.45)){d.x+=a;d.z+=b;break}
+if(Math.hypot(ex,ez)<1)hurt()}
+}
+function anim(){const view=state==="play"||state==="pause"||state==="between";
+items.forEach(it=>{it.m.rotation.y=T*2;it.m.position.y=.9+Math.sin(T*3+it.x)*.12});
+if(exitObj){const c=hasKey?0x39ff7a:0xff3b5c;exitObj.ring.material.color.setHex(c);exitObj.ring.material.emissive.setHex(c);exitObj.col.material.color.setHex(c);exitObj.ring.rotation.z=T}
+lasers.forEach(L=>{const on=L.on;L.mat.opacity=on?1:(L.warn&&Math.floor(T*14)%2?.5:.1);L.m.scale.x=on?1.6:.6;L.m.position.x=L.x});
+drones.forEach(d=>{d.m.position.set(d.x,1+Math.sin(T*3+d.sx)*.15,d.z);d.m.rotation.y=T});
+if(NET.on&&NET.players)for(const id in NET.players){const q=NET.players[id];if(id===NET.me||!q.mesh)continue;q.mesh.visible=q.alive!==false;if(q.x!==undefined){q.mesh.position.x+=(q.x-q.mesh.position.x)*.35;q.mesh.position.z+=(q.z-q.mesh.position.z)*.35;q.mesh.rotation.y=(q.yaw||0)+Math.PI}}
+if(player){player.position.set(P.x,0,P.z);player.visible=!(view&&fpMode);shieldFx.visible=shield&&!fpMode;plight.position.set(P.x,3,P.z)}
+const fv=fpMode?72:55;if(cam.fov!==fv){cam.fov=fv;cam.updateProjectionMatrix()}
+scene.fog.near=!view?40:fpMode?6:18;scene.fog.far=!view?90:fpMode?24:34;if(ceil)ceil.visible=view&&fpMode;
+if(!view){const a=T*.15;cam.position.set(14+Math.cos(a)*22,16,10+Math.sin(a)*14);cam.lookAt(14,0,10)}
+else if(fpMode){cam.position.set(P.x,1.3,P.z);cam.rotation.set(0,yaw,0)}
+else{cam.position.lerp(new THREE.Vector3(P.x,13,P.z+8),.1);cam.lookAt(cam.position.x,0,cam.position.z-8)}
+// HUD
+const inPlay=state==="play"||state==="pause"||state==="between";$("hud").style.visibility=inPlay?"visible":"hidden";$("mm").style.display=inPlay&&fpMode?"block":"none";if(inPlay&&fpMode)drawMap();$("hint").style.display=state==="play"&&fpMode&&!document.pointerLockElement?"block":"none";
+mpBar(inPlay);
+$("fx").style.boxShadow=shield?"inset 0 0 90px #3d7bffaa":invuln>0&&state==="play"?"inset 0 0 130px #ff3b5ccc":"none";
+$("lv").textContent="LEVEL "+(lvl+1)+(fpMode?" · FIRST PERSON":" · TOP-DOWN");$("lives").textContent="❤️".repeat(Math.max(lives,0))+"🖤".repeat(3-Math.max(lives,0));
+$("score").textContent="SCORE: "+score;$("key").textContent="KEY: "+(hasKey?"✓":"LOCKED");
+$("pw").textContent=shield?"🛡 SHIELD":boost>0?"⚡ "+boost.toFixed(1)+"s":"";$("pw").style.display=shield||boost>0?"":"none";
+$("time").textContent="TIME: "+Math.ceil(time);$("time").style.color=time<10?"#ff3b5c":"#ffd23f"}
+
+// ---------- MINIMAP ----------
 const mx=$("mm").getContext("2d");
-function drawMap(){const s=20,mp=v=>v*s/2+s/2;mx.clearRect(0,0,300,220);G.forEach((row,r)=>[...row].forEach((ch,c)=>{if(ch==="#"){mx.fillStyle="#1a2f7a";mx.fillRect(c*s,r*s,s,s)}}));const col={C:"#ffd23f",K:"#ffffff",S:"#3d7bff",F:"#39ff7a",I:"#b04dff"};items.forEach(it=>{if(it.got)return;const k=it.t==="C"?4:9;mx.fillStyle=col[it.t];mx.fillRect(mp(it.x)-k/2,mp(it.z)-k/2,k,k)});if(exitObj){mx.fillStyle=hasKey?"#39ff7a":"#ff3b5c";mx.fillRect(mp(exitObj.x)-7,mp(exitObj.z)-7,14,14)}lasers.forEach(L=>{mx.fillStyle=L.on?"#ff2040":"#55223a";mx.fillRect(mp(L.x)-1.5,mp(L.z)-10,3,20)});mx.fillStyle="#b04dff";drones.forEach(d=>{mx.beginPath();mx.arc(mp(d.x),mp(d.z),5,0,7);mx.fill()});if(NET.on)for(const id in NET.players){const q=NET.players[id];if(id===NET.me||q.alive===false||q.x===undefined)continue;mx.fillStyle=hex(PCOL[q.ci]);mx.beginPath();mx.arc(mp(q.x),mp(q.z),5,0,7);mx.fill()}mx.save();mx.translate(mp(P.x),mp(P.z));mx.rotate(-yaw);mx.fillStyle="#19e6ff";mx.beginPath();mx.moveTo(0,-8);mx.lineTo(6,6);mx.lineTo(-6,6);mx.fill();mx.restore()}
-const PCOL=[0x19e6ff,0xff9f1c,0x39ff7a,0xff4de0,0xffd23f,0x3d7bff,0xff3b5c,0xb04dff];const hex=c=>"#"+c.toString(16).padStart(6,"0");const clean=t=>String(t).replace(/[^\w \-]/g,"").slice(0,12).trim()||"Player";function mpReset(){try{clearTimeout(NET.to);NET.peer&&NET.peer.destroy()}catch(e){}NET={on:false}}function mpErr(msg){mpReset();ov(`<div><h1 style="font-size:36px">MULTIPLAYER</h1><p style="color:#ff3b5c">${msg}</p><button onclick="mpMenu()">BACK</button></div>`)}function mpMenu(){SFX.click();mpReset();ov(`<div><h1 style="font-size:44px">MULTIPLAYER</h1><h2 style="letter-spacing:.1em">RACE TO THE EXIT</h2><p>First player to grab the key and reach the exit wins. If nobody makes it, the last player standing wins.</p><p><input id="nm" maxlength="12" value="Player${Math.floor(Math.random()*90+10)}" placeholder="Your name"></p><button onclick="createParty()">CREATE PARTY</button><p><input id="code" maxlength="5" placeholder="INVITE CODE" style="text-transform:uppercase"></p><button onclick="joinParty()">JOIN PARTY</button><button onclick="menu()">BACK</button></div>`)}function createParty(){SFX.click();const name=clean($("nm").value),L="ABCDEFGHJKLMNPQRSTUVWXYZ";const code=Array.from({length:5},()=>L[Math.floor(Math.random()*L.length)]).join("");mpReset();NET={on:false,isHost:true,me:"host",code,lvl:0,conns:[],players:{host:{name,ci:0,alive:true}},over:false,run:false};ov("<div><h1 style='font-size:36px'>CREATING PARTY...</h1></div>");try{NET.peer=new Peer("lm-"+code)}catch(e){return mpErr("The multiplayer library did not load. Check your internet connection.")}NET.peer.on("open",()=>showLobby());NET.peer.on("error",e=>mpErr(e.type==="unavailable-id"?"That code is in use. Try again.":"Connection error: "+e.type));NET.peer.on("connection",c=>{c.on("data",m=>hostHandle(m,c));c.on("close",()=>{if(NET.players&&NET.players[c.peer])hostHandle({t:"left",id:c.peer},c)})})}function joinParty(){SFX.click();const name=clean($("nm").value),code=($("code").value||"").trim().toUpperCase();if(code.length!==5)return mpErr("Enter the 5-letter invite code.");mpReset();NET={on:false,isHost:false,code,players:{},lvl:0};ov("<div><h1 style='font-size:36px'>JOINING...</h1></div>");NET.to=setTimeout(()=>mpErr("Could not reach that party. Check the code and your internet. School networks may block this."),12000);try{NET.peer=new Peer()}catch(e){return mpErr("The multiplayer library did not load. Check your internet connection.")}NET.peer.on("error",e=>mpErr(e.type==="peer-unavailable"?"No party found with that code.":"Connection error: "+e.type));NET.peer.on("open",id=>{NET.me=id;const c=NET.peer.connect("lm-"+code,{reliable:true});NET.hostConn=c;c.on("open",()=>{clearTimeout(NET.to);c.send({t:"hello",name})});c.on("data",guestHandle);c.on("close",()=>{if(NET.hostConn===c)mpErr("The host left the party.")})})}function emit(m){if(NET.isHost)hostHandle(m,null);else if(NET.hostConn&&NET.hostConn.open)NET.hostConn.send(m)}function bcast(m,except){(NET.conns||[]).forEach(c=>{if(c!==except&&c.open)c.send(m)})}function lobbyCast(){const list=Object.entries(NET.players).map(([id,p])=>({id,name:p.name,ci:p.ci}));bcast({t:"lobby",list,lvl:NET.lvl});showLobby()}function hostHandle(m,c){const PL=NET.players;if(!PL)return;if(m.t==="hello"){if(NET.run||Object.keys(PL).length>=8){c.send({t:"full"});return}if(!NET.conns.includes(c))NET.conns.push(c);const used=Object.values(PL).map(p=>p.ci);let ci=0;while(used.includes(ci))ci++;PL[c.peer]={name:clean(m.name),ci,alive:true};lobbyCast()}else if(m.t==="pos"&&PL[m.id]){Object.assign(PL[m.id],{x:m.x,z:m.z,yaw:m.yaw,lives:m.lives,score:m.score});bcast(m,c)}else if(m.t==="left"&&PL[m.id]){NET.conns=NET.conns.filter(x=>x!==c);if(NET.run){PL[m.id].alive=false;bcast({t:"dead",id:m.id});checkWin(m.id)}else{delete PL[m.id];lobbyCast()}}else if(m.t==="dead"&&PL[m.id]&&PL[m.id].alive&&NET.run){PL[m.id].alive=false;bcast({t:"dead",id:m.id});checkWin(m.id)}else if(m.t==="finish"&&NET.run&&!NET.over)endMatch(m.id,"finish")}function checkWin(last){if(NET.over||!NET.run)return;const al=Object.keys(NET.players).filter(i=>NET.players[i].alive);if(al.length<=1)endMatch(al[0]||last,"last")}function hostResolve(){const al=Object.keys(NET.players).filter(i=>NET.players[i].alive);al.sort((a,b)=>(NET.players[b].lives??3)-(NET.players[a].lives??3)||(NET.players[b].score||0)-(NET.players[a].score||0));endMatch(al[0]||NET.me,"time")}function endMatch(w,reason){NET.over=true;bcast({t:"over",w,reason});showResult(w,reason)}function mpClock(dt){if(NET.on&&NET.isHost&&NET.run&&!NET.over){NET.t-=dt;if(NET.t<=0)hostResolve()}}function guestHandle(m){if(m.t==="lobby"){NET.players={};m.list.forEach(p=>NET.players[p.id]={name:p.name,ci:p.ci,alive:true});NET.lvl=m.lvl;if(!NET.run)showLobby()}else if(m.t==="start")startMP(m.lvl);else if(m.t==="pos"){const q=NET.players[m.id];if(q)Object.assign(q,{x:m.x,z:m.z,yaw:m.yaw,lives:m.lives,score:m.score})}else if(m.t==="dead"){if(NET.players[m.id])NET.players[m.id].alive=false}else if(m.t==="over"){showResult(m.w,m.reason)}else if(m.t==="full")mpErr("That party is full or already started.")}function showLobby(){state="menu";NET.on=false;NET.run=false;NET.over=false;const ps=Object.entries(NET.players).map(([id,p])=>`<p style="margin:2px;color:${hex(PCOL[p.ci])}">● ${p.name}${id==="host"?" (host)":""}${id===NET.me?" (you)":""}</p>`).join("");const msg=NET.msg||"";NET.msg="";ov(`<div><h1 style="font-size:40px">PARTY LOBBY</h1><p>INVITE CODE</p><p style="font-size:3em;letter-spacing:.2em;color:#ffd23f;margin:0">${NET.code}</p>${ps}<p>LEVEL ${NET.lvl+1}: ${LV[NET.lvl].n}</p><p style="color:#ff3b5c">${msg}</p><button onclick="toggleView()">VIEW: ${fpMode?"FIRST PERSON":"TOP-DOWN"}</button>${NET.isHost?'<button onclick="mpLvl()">CHANGE LEVEL</button><button onclick="mpStart()">START RACE</button>':"<p>Waiting for the host to start...</p>"}<button onclick="menu()">LEAVE PARTY</button></div>`)}function toggleView(){fpMode=!fpMode;showLobby()}function mpLvl(){NET.lvl=(NET.lvl+1)%LV.length;lobbyCast()}function mpStart(){if(Object.keys(NET.players).length<2){NET.msg="Need at least 2 players";return showLobby()}bcast({t:"start",lvl:NET.lvl});startMP(NET.lvl)}function rematch(){Object.values(NET.players).forEach(p=>p.alive=true);lobbyCast()}function startMP(l){SFX.click();NET.on=true;NET.run=true;NET.over=false;NET.tick=0;NET.t=LV[l].t*2;lvl=l;score=0;lives=3;loadLevel(l);time=NET.t;for(const id in NET.players){const p=NET.players[id];p.alive=true;p.lives=3;p.score=0;p.x=start.x;p.z=start.z;p.yaw=-Math.PI/2;p.mesh=null;if(id!==NET.me){const m=mkRobot(),c=PCOL[p.ci];m.children[0].material.color.setHex(c);m.children[0].material.emissive.setHex(c);m.position.set(p.x,0,p.z);W.add(m);p.mesh=m}}}function mpDie(){state="spec";if(document.exitPointerLock)document.exitPointerLock();toast("ELIMINATED - SPECTATING","#ff3b5c",600000);SFX.over();emit({t:"dead",id:NET.me})}function mpTimeUp(){state="spec";toast("TIME UP - WAITING FOR RESULT","#ffd23f",600000)}function mpFinish(){state="spec";SFX.win();toast("YOU REACHED THE EXIT!","#39ff7a",600000);emit({t:"finish",id:NET.me})}function showResult(w,reason){NET.run=false;NET.over=true;state="mpover";clearTimeout(tt);$("toast").textContent="";if(document.exitPointerLock)document.exitPointerLock();const p=NET.players[w],name=p?p.name:"Nobody",me=w===NET.me;const why=reason==="finish"?"reached the exit first":reason==="last"?"was the last player standing":"had the most lives when time ran out";me?SFX.win():SFX.over();ov(`<div><h1>${me?"YOU WIN!":"YOU LOST"}</h1><h2 style="letter-spacing:.08em">${name} ${why}</h2>${NET.isHost?'<button onclick="rematch()">BACK TO LOBBY</button>':"<p>Waiting for the host...</p>"}<button onclick="menu()">LEAVE PARTY</button></div>`)}function mpBar(inPlay){const b=$("mpbar");if(!NET.on||!(inPlay||state==="spec")){b.style.display="none";return}b.style.display="block";b.innerHTML=Object.entries(NET.players).map(([id,p])=>{const lv=id===NET.me?lives:(p.lives===undefined?3:p.lives);return `<div style="color:${hex(PCOL[p.ci])}">${p.alive===false?"☠ "+p.name+" OUT":"● "+p.name+" "+"❤".repeat(Math.max(lv,0))}</div>`}).join("")}function setMode(m){fpMode=m;menu()}function menu(){SFX.click();mpReset();$("toast").textContent="";state="menu";loadLevel(0);state="menu";ov(`<div><h1>LASER MAZE</h1><h2>ESCAPE PROTOCOL</h2><p style="margin:0">VIEW MODE</p><button onclick="setMode(false)" style="${!fpMode?"background:#19e6ff;color:#02040a":""}">TOP-DOWN (STANDARD)</button><button onclick="setMode(true)" style="${fpMode?"background:#19e6ff;color:#02040a":""}">FIRST PERSON (HARDER)</button><p style="color:#ffd23f;font-size:15px"><b>First person is the harder mode:</b> you can only see what is ahead of you, the timers are shorter and the drones are faster. Top-down has a limited view and more time.</p><button onclick="newGame()">PLAY</button><button onclick="mpMenu()">MULTIPLAYER</button><button onclick="howto()">INSTRUCTIONS</button><button onclick="scores()">HIGH SCORE</button><button onclick="quit()">QUIT</button></div>`)}function howto(){SFX.click();ov(`<div><h1 style="font-size:44px">HOW TO PLAY</h1><br><p><b>Top-down:</b> arrow keys or WASD move you in that direction. <b>First person (harder):</b> W/&uarr; walk, S/&darr; back, A/D or &larr;/&rarr; turn, Q/E sidestep. Click the game, then move the mouse to look around (the mouse only turns you, the keys move you). You only see ahead, so use the minimap. P or Esc pauses. R restarts the level. M mutes music.</p><p>Find the <b style="color:#ffd23f">key</b>, then reach the <b style="color:#39ff7a">exit</b> before time runs out.</p><p>Red lasers cost a life when they are <b>on</b>. Timed lasers flicker just before they switch on. Moving lasers sweep the corridor.</p><p>Purple drones chase you. 🛡 shield blocks one hit, ⚡ boosts speed, ⏱ adds 10 seconds. Coins give 10 points.</p><button onclick="menu()">BACK</button></div>`)}function scores(){SFX.click();ov(`<div><h1 style="font-size:44px">HIGH SCORE</h1><p style="font-size:3em;color:#ffd23f;margin:20px">${hi}</p><button onclick="menu()">BACK</button></div>`)}function quit(){SFX.click();ov(`<div><h1 style="font-size:44px">SYSTEM SHUTDOWN</h1><p>Thanks for playing. You can close this tab.</p><button onclick="menu()">BACK TO MENU</button></div>`);try{window.close()}catch(e){}}
-const clock=new THREE.Clock();(function loop(){requestAnimationFrame(loop);const dt=Math.min(clock.getDelta(),.05);T+=dt;if(state==="play")update(dt);mpClock(dt);anim();ren.render(scene,cam)})();menu();
-</script></body></html>
+function drawMap(){const s=20,mp=v=>v*s/2+s/2;mx.clearRect(0,0,300,220);
+G.forEach((row,r)=>[...row].forEach((ch,c)=>{if(ch==="#"){mx.fillStyle="#1a2f7a";mx.fillRect(c*s,r*s,s,s)}}));
+const col={C:"#ffd23f",K:"#ffffff",S:"#3d7bff",F:"#39ff7a",I:"#b04dff"};
+items.forEach(it=>{if(it.got)return;const k=it.t==="C"?4:9;mx.fillStyle=col[it.t];mx.fillRect(mp(it.x)-k/2,mp(it.z)-k/2,k,k)});
+if(exitObj){mx.fillStyle=hasKey?"#39ff7a":"#ff3b5c";mx.fillRect(mp(exitObj.x)-7,mp(exitObj.z)-7,14,14)}
+lasers.forEach(L=>{mx.fillStyle=L.on?"#ff2040":"#55223a";mx.fillRect(mp(L.x)-1.5,mp(L.z)-10,3,20)});
+mx.fillStyle="#b04dff";drones.forEach(d=>{mx.beginPath();mx.arc(mp(d.x),mp(d.z),5,0,7);mx.fill()});
+if(NET.on)for(const id in NET.players){const q=NET.players[id];if(id===NET.me||q.alive===false||q.x===undefined)continue;mx.fillStyle=hex(PCOL[q.ci]);mx.beginPath();mx.arc(mp(q.x),mp(q.z),5,0,7);mx.fill()}
+mx.save();mx.translate(mp(P.x),mp(P.z));mx.rotate(-yaw);mx.fillStyle="#19e6ff";mx.beginPath();mx.moveTo(0,-8);mx.lineTo(6,6);mx.lineTo(-6,6);mx.fill();mx.restore()}
+// ---------- MULTIPLAYER (PeerJS peer-to-peer, needs internet) ----------
+// The host creates a party with a 5-letter code. Guests connect to the host, and the host relays messages.
+// Each player simulates their own robot and sends their position about 14 times a second.
+const PCOL=[0x19e6ff,0xff9f1c,0x39ff7a,0xff4de0,0xffd23f,0x3d7bff,0xff3b5c,0xb04dff];
+const hex=c=>"#"+c.toString(16).padStart(6,"0");
+const clean=t=>String(t).replace(/[^\w \-]/g,"").slice(0,12).trim()||"Player";
+function mpReset(){try{clearTimeout(NET.to);NET.peer&&NET.peer.destroy()}catch(e){}NET={on:false}}
+function mpErr(msg){mpReset();ov(`<div><h1 style="font-size:36px">MULTIPLAYER</h1><p style="color:#ff3b5c">${msg}</p><button onclick="mpMenu()">BACK</button></div>`)}
+function mpMenu(){SFX.click();mpReset();ov(`<div><h1 style="font-size:44px">MULTIPLAYER</h1><h2 style="letter-spacing:.1em">RACE TO THE EXIT</h2>
+<p>First player to grab the key and reach the exit wins. If nobody makes it, the last player standing wins.</p>
+<p><input id="nm" maxlength="12" value="Player${Math.floor(Math.random()*90+10)}" placeholder="Your name"></p>
+<button onclick="createParty()">CREATE PARTY</button>
+<p><input id="code" maxlength="5" placeholder="INVITE CODE" style="text-transform:uppercase"></p>
+<button onclick="joinParty()">JOIN PARTY</button><button onclick="menu()">BACK</button></div>`)}
+function createParty(){SFX.click();const name=clean($("nm").value),L="ABCDEFGHJKLMNPQRSTUVWXYZ";
+const code=Array.from({length:5},()=>L[Math.floor(Math.random()*L.length)]).join("");
+mpReset();NET={on:false,isHost:true,me:"host",code,lvl:0,conns:[],players:{host:{name,ci:0,alive:true}},over:false,run:false};
+ov("<div><h1 style='font-size:36px'>CREATING PARTY...</h1></div>");
+try{NET.peer=new Peer("lm-"+code)}catch(e){return mpErr("The multiplayer library did not load. Check your internet connection.")}
+NET.peer.on("open",()=>showLobby());
+NET.peer.on("error",e=>mpErr(e.type==="unavailable-id"?"That code is in use. Try again.":"Connection error: "+e.type));
+NET.peer.on("connection",c=>{c.on("data",m=>hostHandle(m,c));c.on("close",()=>{if(NET.players&&NET.players[c.peer])hostHandle({t:"left",id:c.peer},c)})})}
+function joinParty(){SFX.click();const name=clean($("nm").value),code=($("code").value||"").trim().toUpperCase();
+if(code.length!==5)return mpErr("Enter the 5-letter invite code.");
+mpReset();NET={on:false,isHost:false,code,players:{},lvl:0};
+ov("<div><h1 style='font-size:36px'>JOINING...</h1></div>");
+NET.to=setTimeout(()=>mpErr("Could not reach that party. Check the code and your internet. School networks may block this."),12000);
+try{NET.peer=new Peer()}catch(e){return mpErr("The multiplayer library did not load. Check your internet connection.")}
+NET.peer.on("error",e=>mpErr(e.type==="peer-unavailable"?"No party found with that code.":"Connection error: "+e.type));
+NET.peer.on("open",id=>{NET.me=id;const c=NET.peer.connect("lm-"+code,{reliable:true});NET.hostConn=c;
+c.on("open",()=>{clearTimeout(NET.to);c.send({t:"hello",name})});
+c.on("data",guestHandle);
+c.on("close",()=>{if(NET.hostConn===c)mpErr("The host left the party.")})})}
+function emit(m){if(NET.isHost)hostHandle(m,null);else if(NET.hostConn&&NET.hostConn.open)NET.hostConn.send(m)}
+function bcast(m,except){(NET.conns||[]).forEach(c=>{if(c!==except&&c.open)c.send(m)})}
+function lobbyCast(){const list=Object.entries(NET.players).map(([id,p])=>({id,name:p.name,ci:p.ci}));bcast({t:"lobby",list,lvl:NET.lvl});showLobby()}
+function hostHandle(m,c){const PL=NET.players;if(!PL)return;
+if(m.t==="hello"){if(NET.run||Object.keys(PL).length>=8){c.send({t:"full"});return}
+if(!NET.conns.includes(c))NET.conns.push(c);
+const used=Object.values(PL).map(p=>p.ci);let ci=0;while(used.includes(ci))ci++;
+PL[c.peer]={name:clean(m.name),ci,alive:true};lobbyCast()}
+else if(m.t==="pos"&&PL[m.id]){Object.assign(PL[m.id],{x:m.x,z:m.z,yaw:m.yaw,lives:m.lives,score:m.score});bcast(m,c)}
+else if(m.t==="left"&&PL[m.id]){NET.conns=NET.conns.filter(x=>x!==c);
+if(NET.run){PL[m.id].alive=false;bcast({t:"dead",id:m.id});checkWin(m.id)}else{delete PL[m.id];lobbyCast()}}
+else if(m.t==="dead"&&PL[m.id]&&PL[m.id].alive&&NET.run){PL[m.id].alive=false;bcast({t:"dead",id:m.id});checkWin(m.id)}
+else if(m.t==="finish"&&NET.run&&!NET.over)endMatch(m.id,"finish")}
+function checkWin(last){if(NET.over||!NET.run)return;const al=Object.keys(NET.players).filter(i=>NET.players[i].alive);if(al.length<=1)endMatch(al[0]||last,"last")}
+function hostResolve(){const al=Object.keys(NET.players).filter(i=>NET.players[i].alive);
+al.sort((a,b)=>(NET.players[b].lives??3)-(NET.players[a].lives??3)||(NET.players[b].score||0)-(NET.players[a].score||0));
+endMatch(al[0]||NET.me,"time")}
+function endMatch(w,reason){NET.over=true;bcast({t:"over",w,reason});showResult(w,reason)}
+function mpClock(dt){if(NET.on&&NET.isHost&&NET.run&&!NET.over){NET.t-=dt;if(NET.t<=0)hostResolve()}}
+function guestHandle(m){
+if(m.t==="lobby"){NET.players={};m.list.forEach(p=>NET.players[p.id]={name:p.name,ci:p.ci,alive:true});NET.lvl=m.lvl;if(!NET.run)showLobby()}
+else if(m.t==="start")startMP(m.lvl);
+else if(m.t==="pos"){const q=NET.players[m.id];if(q)Object.assign(q,{x:m.x,z:m.z,yaw:m.yaw,lives:m.lives,score:m.score})}
+else if(m.t==="dead"){if(NET.players[m.id])NET.players[m.id].alive=false}
+else if(m.t==="over"){showResult(m.w,m.reason)}
+else if(m.t==="full")mpErr("That party is full or already started.")}
+function showLobby(){state="menu";NET.on=false;NET.run=false;NET.over=false;
+const ps=Object.entries(NET.players).map(([id,p])=>`<p style="margin:2px;color:${hex(PCOL[p.ci])}">● ${p.name}${id==="host"?" (host)":""}${id===NET.me?" (you)":""}</p>`).join("");
+const msg=NET.msg||"";NET.msg="";
+ov(`<div><h1 style="font-size:40px">PARTY LOBBY</h1><p>INVITE CODE</p><p style="font-size:3em;letter-spacing:.2em;color:#ffd23f;margin:0">${NET.code}</p>
+${ps}<p>LEVEL ${NET.lvl+1}: ${LV[NET.lvl].n}</p><p style="color:#ff3b5c">${msg}</p>
+<button onclick="toggleView()">VIEW: ${fpMode?"FIRST PERSON":"TOP-DOWN"}</button>
+${NET.isHost?'<button onclick="mpLvl()">CHANGE LEVEL</button><button onclick="mpStart()">START RACE</button>':"<p>Waiting for the host to start...</p>"}
+<button onclick="menu()">LEAVE PARTY</button></div>`)}
+function toggleView(){fpMode=!fpMode;showLobby()}
+function mpLvl(){NET.lvl=(NET.lvl+1)%LV.length;lobbyCast()}
+function mpStart(){if(Object.keys(NET.players).length<2){NET.msg="Need at least 2 players";return showLobby()}
+bcast({t:"start",lvl:NET.lvl});startMP(NET.lvl)}
+function rematch(){Object.values(NET.players).forEach(p=>p.alive=true);lobbyCast()}
+function startMP(l){SFX.click();NET.on=true;NET.run=true;NET.over=false;NET.tick=0;NET.t=LV[l].t*2;
+lvl=l;score=0;lives=3;loadLevel(l);time=NET.t;
+for(const id in NET.players){const p=NET.players[id];p.alive=true;p.lives=3;p.score=0;p.x=start.x;p.z=start.z;p.yaw=-Math.PI/2;p.mesh=null;
+if(id!==NET.me){const m=mkRobot(),c=PCOL[p.ci];m.children[0].material.color.setHex(c);m.children[0].material.emissive.setHex(c);m.position.set(p.x,0,p.z);W.add(m);p.mesh=m}}}
+function mpDie(){state="spec";if(document.exitPointerLock)document.exitPointerLock();toast("ELIMINATED - SPECTATING","#ff3b5c",600000);SFX.over();emit({t:"dead",id:NET.me})}
+function mpTimeUp(){state="spec";toast("TIME UP - WAITING FOR RESULT","#ffd23f",600000)}
+function mpFinish(){state="spec";SFX.win();toast("YOU REACHED THE EXIT!","#39ff7a",600000);emit({t:"finish",id:NET.me})}
+function showResult(w,reason){NET.run=false;NET.over=true;state="mpover";clearTimeout(tt);$("toast").textContent="";if(document.exitPointerLock)document.exitPointerLock();
+const p=NET.players[w],name=p?p.name:"Nobody",me=w===NET.me;
+const why=reason==="finish"?"reached the exit first":reason==="last"?"was the last player standing":"had the most lives when time ran out";
+me?SFX.win():SFX.over();
+ov(`<div><h1>${me?"YOU WIN!":"YOU LOST"}</h1><h2 style="letter-spacing:.08em">${name} ${why}</h2>
+${NET.isHost?'<button onclick="rematch()">BACK TO LOBBY</button>':"<p>Waiting for the host...</p>"}<button onclick="menu()">LEAVE PARTY</button></div>`)}
+function mpBar(inPlay){const b=$("mpbar");if(!NET.on||!(inPlay||state==="spec")){b.style.display="none";return}
+b.style.display="block";b.innerHTML=Object.entries(NET.players).map(([id,p])=>{const lv=id===NET.me?lives:(p.lives===undefined?3:p.lives);
+return `<div style="color:${hex(PCOL[p.ci])}">${p.alive===false?"☠ "+p.name+" OUT":"● "+p.name+" "+"❤".repeat(Math.max(lv,0))}</div>`}).join("")}
+// ---------- MENUS ----------
+function setMode(m){fpMode=m;menu()}
+function menu(){SFX.click();mpReset();$("toast").textContent="";state="menu";loadLevel(0);state="menu";ov(`<div><h1>LASER MAZE</h1><h2>ESCAPE PROTOCOL</h2>
+<p style="margin:0">VIEW MODE</p><button onclick="setMode(false)" style="${!fpMode?"background:#19e6ff;color:#02040a":""}">TOP-DOWN (STANDARD)</button><button onclick="setMode(true)" style="${fpMode?"background:#19e6ff;color:#02040a":""}">FIRST PERSON (HARDER)</button>
+<p style="color:#ffd23f;font-size:15px"><b>First person is the harder mode:</b> you can only see what is ahead of you, the timers are shorter and the drones are faster. Top-down has a limited view and more time.</p>
+<button onclick="newGame()">PLAY</button><button onclick="mpMenu()">MULTIPLAYER</button><button onclick="howto()">INSTRUCTIONS</button><button onclick="scores()">HIGH SCORE</button><button onclick="quit()">QUIT</button></div>`)}
+function howto(){SFX.click();ov(`<div><h1 style="font-size:44px">HOW TO PLAY</h1><br><p><b>Top-down:</b> arrow keys or WASD move you in that direction. <b>First person (harder):</b> W/&uarr; walk, S/&darr; back, A/D or &larr;/&rarr; turn, Q/E sidestep. Click the game, then move the mouse to look around (the mouse only turns you, the keys move you). You only see ahead, so use the minimap. P or Esc pauses. R restarts the level. M mutes music.</p>
+<p>Find the <b style="color:#ffd23f">key</b>, then reach the <b style="color:#39ff7a">exit</b> before time runs out.</p>
+<p>Red lasers cost a life when they are <b>on</b>. Timed lasers flicker just before they switch on. Moving lasers sweep the corridor.</p>
+<p>Purple drones chase you. 🛡 shield blocks one hit, ⚡ boosts speed, ⏱ adds 10 seconds. Coins give 10 points.</p><button onclick="menu()">BACK</button></div>`)}
+function scores(){SFX.click();ov(`<div><h1 style="font-size:44px">HIGH SCORE</h1><p style="font-size:3em;color:#ffd23f;margin:20px">${hi}</p><button onclick="menu()">BACK</button></div>`)}
+function quit(){SFX.click();ov(`<div><h1 style="font-size:44px">SYSTEM SHUTDOWN</h1><p>Thanks for playing. You can close this tab.</p><button onclick="menu()">BACK TO MENU</button></div>`);try{window.close()}catch(e){}}
+
+const clock=new THREE.Clock();
+(function loop(){requestAnimationFrame(loop);const dt=Math.min(clock.getDelta(),.05);T+=dt;if(state==="play")update(dt);mpClock(dt);anim();ren.render(scene,cam)})();
+menu();
+}
+window.addEventListener('DOMContentLoaded', function () {
+  loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js', 'https://unpkg.com/three@0.128.0/build/three.min.js', function () {
+    loadScript('https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js', 'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js', function () {
+      startGame();
+    }, function () {
+      window.__gameLoadFailure('PeerJS library failed to load.');
+    });
+  }, function () {
+    window.__gameLoadFailure('Three.js library failed to load.');
+  });
+});
+</script>
+</body></html>
